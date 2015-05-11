@@ -58,6 +58,8 @@ import java.util.Properties;
 
 import static java.lang.String.format;
 
+class StrToIntException extends Exception { }
+
 /**
  * The BSONSerDe class deserializes (parses) and serializes object from BSON to Hive represented object. It's initialized with the hive
  * columns and hive recognized types as well as other config variables mandated by the StorageHanders.
@@ -207,8 +209,11 @@ public class BSONSerDe implements SerDe {
                                    : fieldName;
                 }
                 value = deserializeField(getValue(doc, mongoMapping), fieldTypeInfo, fieldName);
-            } catch (Exception e) {
-                LOG.warn("Could not find the appropriate field for name " + fieldName);
+            } catch (StrToIntException e) {
+		LOG.warn("Skipped conversion from STR to INT for field name '" + fieldName + "'");
+                value = null;
+	    } catch (Exception e) {
+		LOG.warn("Could not find the appropriate field for name " + fieldName);
                 value = null;
             }
             row.add(value);
@@ -233,7 +238,7 @@ public class BSONSerDe implements SerDe {
      * </p>
      * Map in here must be of the same type, so instead an embedded doc becomes a struct instead. ***
      */
-    public Object deserializeField(final Object value, final TypeInfo valueTypeInfo, final String ext) {
+    public Object deserializeField(final Object value, final TypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
         if (value != null) {
             switch (valueTypeInfo.getCategory()) {
                 case LIST:
@@ -261,7 +266,7 @@ public class BSONSerDe implements SerDe {
     /**
      * Deserialize a List with the same listElemTypeInfo for its elements
      */
-    private Object deserializeList(final Object value, final ListTypeInfo valueTypeInfo, final String ext) {
+    private Object deserializeList(final Object value, final ListTypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
         BasicBSONList list = (BasicBSONList) value;
         TypeInfo listElemTypeInfo = valueTypeInfo.getListElementTypeInfo();
 
@@ -276,7 +281,7 @@ public class BSONSerDe implements SerDe {
      * deserialize the struct stored in 'value' ext : the hive mapping(s) seen so far before 'value' is encountered.
      */
     @SuppressWarnings("unchecked")
-    private Object deserializeStruct(final Object value, final StructTypeInfo valueTypeInfo, final String ext) {
+    private Object deserializeStruct(final Object value, final StructTypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
         // ObjectId will be stored in a special struct
         if (value instanceof ObjectId) {
             return deserializeObjectId(value, valueTypeInfo);
@@ -348,7 +353,7 @@ public class BSONSerDe implements SerDe {
     /**
      * Also deserialize a Map with the same mapElemTypeInfo
      */
-    private Object deserializeMap(final Object value, final MapTypeInfo valueTypeInfo, final String ext) {
+    private Object deserializeMap(final Object value, final MapTypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
         BasicBSONObject b = (BasicBSONObject) value;
         TypeInfo mapValueTypeInfo = valueTypeInfo.getMapValueTypeInfo();
 
@@ -363,7 +368,7 @@ public class BSONSerDe implements SerDe {
     /**
      * Most primitives are included, but some are specific to Mongo instances
      */
-    private Object deserializePrimitive(final Object value, final PrimitiveTypeInfo valueTypeInfo) {
+    private Object deserializePrimitive(final Object value, final PrimitiveTypeInfo valueTypeInfo) throws StrToIntException{
         switch (valueTypeInfo.getPrimitiveCategory()) {
             case BINARY:
                 return value;
@@ -374,11 +379,26 @@ public class BSONSerDe implements SerDe {
             case FLOAT:
                 return ((Number) value).floatValue();
             case INT:
-                return ((Number) value).intValue();
+                if (value instanceof String){
+		    /*return Integer.parseInt((String)value);*/
+		    throw new StrToIntException();
+		}
+		else
+		    return ((Number) value).intValue();
             case LONG:
-                return ((Number) value).longValue();
+                if (value instanceof String){
+		    /*return Integer.parseInt((String)value);*/
+		    throw new StrToIntException();
+		}
+		else
+		    return ((Number) value).longValue();
             case SHORT:
-                return ((Number) value).shortValue();
+		if (value instanceof String){
+		    /*return Integer.parseInt((String)value);*/
+		    throw new StrToIntException();
+		}
+		else
+		    return ((Number) value).shortValue();
             case STRING:
                 return value.toString();
             case TIMESTAMP:
