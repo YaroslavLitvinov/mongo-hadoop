@@ -374,11 +374,20 @@ public class BSONSerDe implements SerDe {
             case FLOAT:
                 return ((Number) value).floatValue();
             case INT:
-                return ((Number) value).intValue();
+                if (value instanceof String)
+		    return Integer.parseInt((String)value);
+		else
+		    return ((Number) value).intValue();
             case LONG:
-                return ((Number) value).longValue();
+                if (value instanceof String)
+		    return Integer.parseInt((String)value);
+		else
+		    return ((Number) value).longValue();
             case SHORT:
-                return ((Number) value).shortValue();
+		if (value instanceof String)
+		    return Integer.parseInt((String)value);
+		else
+		    return ((Number) value).shortValue();
             case STRING:
                 return value.toString();
             case TIMESTAMP:
