@@ -58,8 +58,6 @@ import java.util.Properties;
 
 import static java.lang.String.format;
 
-class StrToIntException extends Exception { }
-
 /**
  * The BSONSerDe class deserializes (parses) and serializes object from BSON to Hive represented object. It's initialized with the hive
  * columns and hive recognized types as well as other config variables mandated by the StorageHanders.
@@ -89,6 +87,9 @@ public class BSONSerDe implements SerDe {
 
     // A row represents a row in the Hive table 
     private List<Object> row = new ArrayList<Object>();
+
+    // String represnts compound name for current deserializing field
+    private ArrayList<String> currentDeserItemName = new ArrayList<String>();
 
     /**
      * Finds out the information of the table, including the column names and types.
@@ -126,6 +127,17 @@ public class BSONSerDe implements SerDe {
             (StructTypeInfo) TypeInfoFactory.getStructTypeInfo(columnNames, columnTypes);
         docOI =
             TypeInfoUtils.getStandardJavaObjectInspectorFromTypeInfo(docTypeInfo);
+    }
+
+    public void warn_type(String mes_from_to_type){
+	String compound_name = "";
+	for (String s:currentDeserItemName){
+	    if (compound_name.length() > 0)
+		compound_name += ".";
+	    compound_name += s;
+	}
+	LOG.warn(String.format("Dangerous type's conversion from %s for field name '%s'",
+			       mes_from_to_type, compound_name));
     }
 
 
@@ -208,10 +220,9 @@ public class BSONSerDe implements SerDe {
                                    ? hiveToMongo.get(fieldName)
                                    : fieldName;
                 }
+		currentDeserItemName.add(fieldName);
                 value = deserializeField(getValue(doc, mongoMapping), fieldTypeInfo, fieldName);
-            } catch (StrToIntException e) {
-		LOG.warn("Skipped conversion from STR to INT for field name '" + fieldName + "'");
-                value = null;
+		currentDeserItemName.clear();
 	    } catch (Exception e) {
 		LOG.warn("Could not find the appropriate field for name " + fieldName);
                 value = null;
@@ -238,7 +249,7 @@ public class BSONSerDe implements SerDe {
      * </p>
      * Map in here must be of the same type, so instead an embedded doc becomes a struct instead. ***
      */
-    public Object deserializeField(final Object value, final TypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
+    public Object deserializeField(final Object value, final TypeInfo valueTypeInfo, final String ext)  {
         if (value != null) {
             switch (valueTypeInfo.getCategory()) {
                 case LIST:
@@ -266,7 +277,7 @@ public class BSONSerDe implements SerDe {
     /**
      * Deserialize a List with the same listElemTypeInfo for its elements
      */
-    private Object deserializeList(final Object value, final ListTypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
+    private Object deserializeList(final Object value, final ListTypeInfo valueTypeInfo, final String ext)  {
         BasicBSONList list = (BasicBSONList) value;
         TypeInfo listElemTypeInfo = valueTypeInfo.getListElementTypeInfo();
 
@@ -281,7 +292,7 @@ public class BSONSerDe implements SerDe {
      * deserialize the struct stored in 'value' ext : the hive mapping(s) seen so far before 'value' is encountered.
      */
     @SuppressWarnings("unchecked")
-    private Object deserializeStruct(final Object value, final StructTypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
+    private Object deserializeStruct(final Object value, final StructTypeInfo valueTypeInfo, final String ext)  {
         // ObjectId will be stored in a special struct
         if (value instanceof ObjectId) {
             return deserializeObjectId(value, valueTypeInfo);
@@ -315,8 +326,10 @@ public class BSONSerDe implements SerDe {
                     }
                 }
 
+		currentDeserItemName.add(fieldName);
                 String nextFieldTrans = extractMongoField(mongoMapping, hiveMapping, ext);
-                struct.add(deserializeField(map.get(nextFieldTrans), structTypes.get(i), hiveMapping));
+		struct.add(deserializeField(map.get(nextFieldTrans), structTypes.get(i), hiveMapping));
+		currentDeserItemName.remove(currentDeserItemName.size()-1);
             }
             return struct;
         }
@@ -353,7 +366,7 @@ public class BSONSerDe implements SerDe {
     /**
      * Also deserialize a Map with the same mapElemTypeInfo
      */
-    private Object deserializeMap(final Object value, final MapTypeInfo valueTypeInfo, final String ext)  throws StrToIntException {
+    private Object deserializeMap(final Object value, final MapTypeInfo valueTypeInfo, final String ext)  {
         BasicBSONObject b = (BasicBSONObject) value;
         TypeInfo mapValueTypeInfo = valueTypeInfo.getMapValueTypeInfo();
 
@@ -368,41 +381,49 @@ public class BSONSerDe implements SerDe {
     /**
      * Most primitives are included, but some are specific to Mongo instances
      */
-    private Object deserializePrimitive(final Object value, final PrimitiveTypeInfo valueTypeInfo) throws StrToIntException{
+    private Object deserializePrimitive(final Object value, final PrimitiveTypeInfo valueTypeInfo) {
+	Class valClass = value.getClass();
+	String valueTypeStr = valClass.getName();
+
         switch (valueTypeInfo.getPrimitiveCategory()) {
             case BINARY:
                 return value;
             case BOOLEAN:
                 return value;
             case DOUBLE:
-                return ((Number) value).doubleValue();
+		if ( valClass != Double.class && valClass != Float.class)
+		    warn_type(String.format("%s to DOUBLE", valueTypeStr));
+		return ((Number) value).doubleValue();
             case FLOAT:
-                return ((Number) value).floatValue();
-            case INT:
-                if (value instanceof String){
-		    /*return Integer.parseInt((String)value);*/
-		    throw new StrToIntException();
-		}
-		else
-		    return ((Number) value).intValue();
+		if (valClass != Float.class)
+		    warn_type(String.format("%s to FLOAT", valueTypeStr));
+		return ((Number) value).floatValue();
             case LONG:
-                if (value instanceof String){
-		    /*return Integer.parseInt((String)value);*/
-		    throw new StrToIntException();
+		if (valClass != Short.class && valClass != Integer.class && valClass != Long.class)
+		    warn_type(String.format("%s to LONG", valueTypeStr));
+		return ((Number) value).longValue();
+            case INT:
+		if (valClass != Short.class && valClass != Integer.class){
+		    if (valClass == Double.class){
+			int decPart = ((Number) value).intValue();
+			double fracPart = ((Number) value).doubleValue() - decPart;
+			if (fracPart>0)
+			    warn_type(String.format("%s to INT %f", valueTypeStr, fracPart));
+		    }
+		    else
+			warn_type(String.format("%s to INT", valueTypeStr));
 		}
-		else
-		    return ((Number) value).longValue();
+		return ((Number) value).intValue();
             case SHORT:
-		if (value instanceof String){
-		    /*return Integer.parseInt((String)value);*/
-		    throw new StrToIntException();
-		}
-		else
-		    return ((Number) value).shortValue();
+		if (valClass != Short.class)
+		    warn_type(String.format("%s to SHORT", valueTypeStr));
+		return ((Number) value).shortValue();
             case STRING:
-                return value.toString();
+		if ( !(value instanceof String) )
+		    warn_type(String.format("%s to STRING", valueTypeStr));
+		return value.toString();
             case TIMESTAMP:
-                if (value instanceof Date) {
+                if ( value instanceof Date) {
                     return new Timestamp(((Date) value).getTime());
                 } else if (value instanceof BSONTimestamp) {
                     return new Timestamp(((BSONTimestamp) value).getTime() * 1000L);
